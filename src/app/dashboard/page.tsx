@@ -43,6 +43,11 @@ export default function AdminDashboard() {
   const { isInstallable, installApp, isIOS } = usePWA();
   const [pwaInstalled, setPwaInstalled] = useState(false);
 
+  // Share Link States
+  const [fullShareUrl, setFullShareUrl] = useState('');
+  const [copiedLink, setCopiedLink] = useState(false);
+  const [showInstaHelper, setShowInstaHelper] = useState(false);
+
   // Renewal checkout states
   const [showRenewalOverlay, setShowRenewalOverlay] = useState(false);
   const [renewalPlan, setRenewalPlan] = useState<'personal' | 'enterprise'>('personal');
@@ -149,6 +154,20 @@ export default function AdminDashboard() {
       setRenewalPlan(session.tenant.plan_type || 'personal');
     }
   }, [session.tenant]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && session.tenant?.slug) {
+      setFullShareUrl(`${window.location.origin}/${session.tenant.slug}`);
+    }
+  }, [session.tenant?.slug]);
+
+  const handleCopyShareLink = () => {
+    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      navigator.clipboard.writeText(fullShareUrl);
+      setCopiedLink(true);
+      setTimeout(() => setCopiedLink(false), 2000);
+    }
+  };
 
   const isSubscriptionExpired = () => {
     if (!session.tenant) return false;
@@ -865,6 +884,96 @@ export default function AdminDashboard() {
                 </p>
               </div>
             )}
+
+            {/* Widget para Divulgar Link da Agenda */}
+            <div className="mb-8 p-6 rounded-2xl border border-zinc-800 bg-zinc-900/30 backdrop-blur-md relative overflow-hidden">
+              <div className="absolute top-0 right-0 -mr-16 -mt-16 w-44 h-44 rounded-full bg-blue-500/5 blur-3xl pointer-events-none" />
+              
+              <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6">
+                <div className="space-y-1 w-full lg:max-w-xl">
+                  <div className="flex items-center gap-2 text-zinc-100">
+                    <Globe size={18} className="text-blue-500" />
+                    <h3 className="font-bold text-base">Divulgar Link da sua Agenda</h3>
+                  </div>
+                  <p className="text-xs text-zinc-400">
+                    Seus clientes podem acessar esta página pública de qualquer dispositivo para agendar horários com sua equipe e serviços de forma independente.
+                  </p>
+                  
+                  {/* Link Input area */}
+                  <div className="flex items-center gap-2 mt-3 bg-zinc-950 border border-zinc-850 rounded-xl p-1 w-full">
+                    <input
+                      type="text"
+                      readOnly
+                      value={fullShareUrl}
+                      className="bg-transparent border-none text-zinc-300 text-xs px-3 py-2 w-full focus:outline-none select-all"
+                    />
+                    <button
+                      onClick={handleCopyShareLink}
+                      className={`px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
+                        copiedLink 
+                          ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-450' 
+                          : 'bg-zinc-900 border border-zinc-800 text-zinc-350 hover:bg-zinc-850 hover:text-white'
+                      }`}
+                    >
+                      {copiedLink ? <Check size={14} /> : null}
+                      {copiedLink ? 'Copiado!' : 'Copiar Link'}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap gap-2.5 sm:self-start lg:self-center">
+                  <a
+                    href={`https://wa.me/?text=${encodeURIComponent(`Olá! Para facilitar seus agendamentos, agora você pode marcar seus horários de forma 100% online através do nosso link: ${fullShareUrl}`)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-4 py-2.5 bg-[#25D366]/10 border border-[#25D366]/20 text-[#25D366] hover:bg-[#25D366]/20 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <MessageSquare size={14} />
+                    Enviar no WhatsApp
+                  </a>
+                  
+                  <button
+                    onClick={() => setShowInstaHelper(!showInstaHelper)}
+                    className="px-4 py-2.5 bg-gradient-to-r from-purple-500/10 to-pink-500/10 border border-pink-500/20 text-pink-400 hover:from-purple-500/20 hover:to-pink-500/20 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Sparkles size={14} />
+                    Link na Bio do Instagram
+                  </button>
+
+                  <a
+                    href={fullShareUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-4 py-2.5 bg-zinc-900 border border-zinc-800 text-zinc-300 hover:bg-zinc-850 hover:text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                  >
+                    Testar Link
+                    <ExternalLink size={14} />
+                  </a>
+                </div>
+              </div>
+
+              {/* Instagram bio helper dialog */}
+              {showInstaHelper && (
+                <div className="mt-4 p-4 rounded-xl bg-zinc-950 border border-zinc-850 animate-in fade-in slide-in-from-top-2 duration-200">
+                  <div className="flex justify-between items-start mb-2">
+                    <span className="text-xs font-bold text-pink-400 uppercase tracking-wider">Como adicionar na bio do Instagram:</span>
+                    <button 
+                      onClick={() => setShowInstaHelper(false)}
+                      className="text-zinc-500 hover:text-zinc-300 text-xs p-1"
+                    >
+                      Fechar
+                    </button>
+                  </div>
+                  <ol className="list-decimal list-inside text-[11px] text-zinc-400 space-y-1.5 leading-relaxed">
+                    <li>Copie o link acima clicando em <strong className="text-zinc-200">"Copiar Link"</strong>.</li>
+                    <li>Abra o Instagram no seu celular, vá no seu perfil e toque em <strong className="text-zinc-200">"Editar Perfil"</strong>.</li>
+                    <li>Toque em <strong className="text-zinc-200">"Links"</strong> e depois em <strong className="text-zinc-200">"Adicionar link externo"</strong>.</li>
+                    <li>Cole o link copiado no campo <strong className="text-pink-450">URL</strong> e insira o Título como <strong className="text-zinc-200">"Agende seu horário"</strong>.</li>
+                    <li>Toque em salvar/concluído. Pronto! O link estará disponível para todos os seus seguidores.</li>
+                  </ol>
+                </div>
+              )}
+            </div>
 
             <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
               <CalendarIcon size={18} className="text-blue-500" />
