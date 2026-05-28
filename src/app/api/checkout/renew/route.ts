@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '../../../lib/supabase';
+import { supabase } from '../../../../lib/supabase';
 
 const MP_ACCESS_TOKEN = 'APP_USR-5493793433155421-052814-0bf808957f5222cf0920e14d72d99507-3432268245';
 
@@ -7,13 +7,8 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const {
-      name,
+      tenantId,
       email,
-      password,
-      tenantName,
-      whatsappNumber,
-      address,
-      niche,
       plan,
       paymentMethod,
       cardToken,
@@ -24,22 +19,26 @@ export async function POST(req: NextRequest) {
       isLocalStorageFallback
     } = body;
 
+    if (!tenantId) {
+      return NextResponse.json({ error: 'Tenant ID não informado' }, { status: 400 });
+    }
+
     const planType = plan === 'enterprise' ? 'enterprise' : 'personal';
     const price = planType === 'enterprise' ? 94.90 : 29.90;
-    const planName = planType === 'enterprise' ? 'Slotfy - Plano Empresarial' : 'Slotfy - Plano Pessoal';
+    const planName = planType === 'enterprise' ? 'Renovação Slotfy - Plano Empresarial' : 'Renovação Slotfy - Plano Pessoal';
 
     let paymentStatus = 'pending';
     let subscriptionExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
     let pixData = null;
 
-    // 1. Process Payment with Mercado Pago
+    // 1. Process payment via Mercado Pago
     if (paymentMethod === 'credit_card') {
       const mpResponse = await fetch('https://api.mercadopago.com/v1/payments', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${MP_ACCESS_TOKEN}`,
           'Content-Type': 'application/json',
-          'X-Idempotency-Key': `cc-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+          'X-Idempotency-Key': `cc-renew-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
         },
         body: JSON.stringify({
           transaction_amount: price,
@@ -48,7 +47,7 @@ export async function POST(req: NextRequest) {
           installments: 1,
           payment_method_id: paymentMethodId || 'visa',
           payer: {
-            email: email,
+            email: email || 'financeiro@slotfy.com',
             identification: {
               type: 'CPF',
               number: (pixCpf || '12345678909').replace(/\D/g, '')
@@ -59,16 +58,15 @@ export async function POST(req: NextRequest) {
 
       if (!mpResponse.ok) {
         const errText = await mpResponse.text();
-        console.error("Mercado Pago CC payment error response:", errText);
-        throw new Error("Falha ao processar pagamento com cartão de crédito no Mercado Pago.");
+        console.error("Mercado Pago CC renewal error:", errText);
+        throw new Error("Falha ao processar pagamento com cartão de crédito.");
       }
 
       const paymentResult = await mpResponse.json();
       if (paymentResult.status === 'approved') {
         paymentStatus = 'active';
       } else {
-        paymentStatus = 'past_due';
-        throw new Error(`Pagamento não aprovado. Status: ${paymentResult.status_detail || paymentResult.status}`);
+        throw new Error(`Pagamento não aprovado. Status: ${paymentResult.status}`);
       }
     } else if (paymentMethod === 'pix') {
       const cleanCpf = (pixCpf || '12345678909').replace(/\D/g, '');
@@ -77,16 +75,16 @@ export async function POST(req: NextRequest) {
         headers: {
           'Authorization': `Bearer ${MP_ACCESS_TOKEN}`,
           'Content-Type': 'application/json',
-          'X-Idempotency-Key': `pix-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+          'X-Idempotency-Key': `pix-renew-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
         },
         body: JSON.stringify({
           transaction_amount: price,
           payment_method_id: 'pix',
           description: planName,
           payer: {
-            email: email,
-            first_name: pixFirstName || name.split(' ')[0] || 'Cliente',
-            last_name: pixLastName || name.split(' ').slice(1).join(' ') || 'Slotfy',
+            email: email || 'financeiro@slotfy.com',
+            first_name: pixFirstName || 'Cliente',
+            last_name: pixLastName || 'Slotfy',
             identification: {
               type: 'CPF',
               number: cleanCpf
@@ -97,8 +95,8 @@ export async function POST(req: NextRequest) {
 
       if (!mpResponse.ok) {
         const errText = await mpResponse.text();
-        console.error("Mercado Pago Pix payment error response:", errText);
-        throw new Error("Falha ao gerar Pix de pagamento no Mercado Pago.");
+        console.error("Mercado Pago Pix renewal error:", errText);
+        throw new Error("Falha ao gerar Pix de pagamento.");
       }
 
       const paymentResult = await mpResponse.json();
@@ -108,7 +106,7 @@ export async function POST(req: NextRequest) {
         ticket_url: paymentResult.point_of_interaction?.transaction_data?.ticket_url,
         payment_id: paymentResult.id
       };
-      paymentStatus = 'inactive'; // remains inactive until paid
+      paymentStatus = 'inactive';
     }
 
     // 2. If it is LocalStorage Fallback, we return success here (saving client-side is handled by frontend)
@@ -122,7 +120,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 3. Register in Supabase (Production DB mode)
+    // 3. Update Supabase
     if (!supabase) {
       return NextResponse.json(
         { error: 'Supabase não está configurado no servidor.' },
@@ -130,70 +128,17 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Generate unique slug
-    let slug = tenantName
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/(^-|-$)+/g, '');
-
-    const { data: existingTenant } = await supabase
+    const { error: updateErr } = await supabase
       .from('tenants')
-      .select('slug')
-      .eq('slug', slug)
-      .maybeSingle();
-
-    if (existingTenant) {
-      slug = `${slug}-${Math.random().toString(36).substr(2, 4)}`;
-    }
-
-    const { data: tenantData, error: tenantErr } = await supabase
-      .from('tenants')
-      .insert({
-        name: tenantName,
-        slug,
-        niche,
-        whatsapp_number: whatsappNumber,
-        address,
+      .update({
         subscription_status: paymentStatus,
-        plan_type: planType,
-        subscription_expires_at: subscriptionExpiresAt
+        subscription_expires_at: subscriptionExpiresAt,
+        plan_type: planType
       })
-      .select()
-      .single();
+      .eq('id', tenantId);
 
-    if (tenantErr) {
-      return NextResponse.json({ error: tenantErr.message }, { status: 400 });
-    }
-
-    // Create Admin Auth User and Profile
-    if (password) {
-      const { data: authData, error: authErr } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data: { name }
-        }
-      });
-
-      if (authErr) {
-        // Rollback tenant creation
-        await supabase.from('tenants').delete().eq('id', tenantData.id);
-        return NextResponse.json({ error: authErr.message }, { status: 400 });
-      }
-
-      if (authData.user) {
-        await supabase
-          .from('profiles')
-          .insert({
-            id: authData.user.id,
-            tenant_id: tenantData.id,
-            name,
-            email,
-            role: 'admin'
-          });
-      }
+    if (updateErr) {
+      return NextResponse.json({ error: updateErr.message }, { status: 400 });
     }
 
     return NextResponse.json({
@@ -205,7 +150,7 @@ export async function POST(req: NextRequest) {
     });
 
   } catch (err: any) {
-    console.error("API checkout error:", err);
+    console.error("API renewal error:", err);
     return NextResponse.json({ error: err.message || 'Erro interno do servidor' }, { status: 500 });
   }
 }

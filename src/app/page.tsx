@@ -4,16 +4,34 @@ import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { db, Tenant } from '../lib/db';
 import { Calendar, Clock, Sparkles, Shield, ArrowRight, Store, ArrowUpRight, MessageSquare, Check, Layers, X, AlertCircle, CheckCircle2, MapPin, User, Mail, Lock, Phone, Sparkle } from 'lucide-react';
+import { usePWA } from '../components/PWAProvider';
 
 export default function Home() {
   const [tenants, setTenants] = useState<Tenant[]>([]);
+  const { isInstallable, installApp, isIOS } = usePWA();
+  const [pwaInstalled, setPwaInstalled] = useState(false);
 
   // Checkout modal states
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState<'personal' | 'enterprise'>('personal');
-  const [checkoutStep, setCheckoutStep] = useState(1); // 1 = Form, 2 = Loading/Processing, 3 = Success
+  const [checkoutStep, setCheckoutStep] = useState(1); // 1 = Form, 2 = Payment form, 3 = Processing, 4 = Success
   const [loadingMessage, setLoadingMessage] = useState('Processando dados...');
   const [checkoutError, setCheckoutError] = useState('');
+
+  // Payment states
+  const [paymentMethod, setPaymentMethod] = useState<'credit_card' | 'pix'>('credit_card');
+  const [cardNumber, setCardNumber] = useState('');
+  const [cardholderName, setCardholderName] = useState('');
+  const [cardExpiry, setCardExpiry] = useState(''); // MM/YY
+  const [cardCvv, setCardCvv] = useState('');
+  const [cardCpf, setCardCpf] = useState('');
+
+  const [pixFirstName, setPixFirstName] = useState('');
+  const [pixLastName, setPixLastName] = useState('');
+  const [pixCpf, setPixCpf] = useState('');
+
+  const [pixData, setPixData] = useState<{ qr_code: string; qr_code_base64: string; ticket_url: string; payment_id: number } | null>(null);
+  const [pixCopied, setPixCopied] = useState(false);
 
   // Super Admin states
   const [showSuperAdminPrompt, setShowSuperAdminPrompt] = useState(false);
@@ -44,55 +62,106 @@ export default function Home() {
     window.location.href = '/dashboard';
   };
 
-  const handleCheckoutSubmit = async (e: React.FormEvent) => {
+  const handleCheckoutSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setCheckoutError('');
-    setCheckoutStep(2);
+    setCheckoutStep(2); // Move to payment details step
+  };
 
-    const steps = [
-      { text: 'Verificando dados cadastrais...', time: 600 },
-      { text: 'Processando pagamento da assinatura...', time: 800 },
-      { text: 'Criando estrutura lógica do estabelecimento...', time: 800 },
-      { text: 'Instalando temas e configurações...', time: 600 },
-      { text: 'Concluindo ativação de conta...', time: 500 }
-    ];
+  const handleFinalizeSubscription = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCheckoutError('');
+    setCheckoutStep(3); // Set loading/processing view
+    setLoadingMessage('Configurando sua transação segura com o Mercado Pago...');
 
     try {
-      for (const s of steps) {
-        setLoadingMessage(s.text);
-        await new Promise(resolve => setTimeout(resolve, s.time));
-      }
+      let cardToken = '';
+      let detectedBrand = 'visa';
 
-      if (db.isSupabaseActive()) {
-        const response = await fetch('/api/checkout', {
+      if (paymentMethod === 'credit_card') {
+        setLoadingMessage('Gerando token criptografado do cartão...');
+        const cleanCard = cardNumber.replace(/\s+/g, '');
+        const cleanCpf = cardCpf.replace(/\D/g, '');
+
+        if (cleanCard.startsWith('4')) detectedBrand = 'visa';
+        else if (/^(5[1-5]|222[1-9]|22[3-9][0-9])/.test(cleanCard)) detectedBrand = 'master';
+        else if (/^(34|37)/.test(cleanCard)) detectedBrand = 'amex';
+        else if (/^(4011|4312|4389|4514|5041|5066|5090|6277|6362|6363|6504|6505|6507|6509|6516)/.test(cleanCard)) detectedBrand = 'elo';
+        else if (/^(6062|6503|6504|6505|6511)/.test(cleanCard)) detectedBrand = 'hipercard';
+
+        const [expiryMonthStr, expiryYearStr] = cardExpiry.split('/');
+        if (!expiryMonthStr || !expiryYearStr) {
+          throw new Error('Data de expiração do cartão inválida. Use o formato MM/AA.');
+        }
+
+        const expiryMonth = parseInt(expiryMonthStr, 10);
+        let expiryYear = parseInt(expiryYearStr, 10);
+        if (expiryYear < 100) expiryYear += 2000;
+
+        const tokenRes = await fetch('https://api.mercadopago.com/v1/card_tokens?public_key=APP_USR-2da670ce-3266-445e-8233-a117d3422961', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
-            name: fullName,
-            email,
-            password,
-            tenantName: businessName,
-            whatsappNumber: whatsapp,
-            address,
-            niche,
-            plan: selectedPlan
+            card_number: cleanCard,
+            expiration_month: expiryMonth,
+            expiration_year: expiryYear,
+            security_code: cardCvv,
+            cardholder: {
+              name: cardholderName,
+              identification: {
+                type: 'CPF',
+                number: cleanCpf
+              }
+            }
           })
         });
 
-        const data = await response.json();
-        if (!response.ok) {
-          throw new Error(data.error || 'Erro ao criar conta');
+        if (!tokenRes.ok) {
+          const errData = await tokenRes.json();
+          console.error("Mercado Pago Card Token Generation failed:", errData);
+          throw new Error(errData.message || 'Erro ao validar os dados do seu cartão. Verifique e tente novamente.');
         }
 
-        if (data.paymentRequired) {
-          window.location.href = data.url;
-          return;
-        }
-      } else {
-        // Fallback local localStorage registration
-        await db.registerTenant({
+        const tokenData = await tokenRes.json();
+        cardToken = tokenData.id;
+      }
+
+      setLoadingMessage('Criando sua conta e ativando serviços no banco...');
+
+      const response = await fetch('/api/checkout', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          name: fullName,
+          email,
+          password,
+          tenantName: businessName,
+          whatsappNumber: whatsapp,
+          address,
+          niche,
+          plan: selectedPlan,
+          paymentMethod,
+          cardToken,
+          paymentMethodId: detectedBrand,
+          pixFirstName,
+          pixLastName,
+          pixCpf,
+          isLocalStorageFallback: !db.isSupabaseActive()
+        })
+      });
+
+      const resData = await response.json();
+      if (!response.ok) {
+        throw new Error(resData.error || 'Erro ao processar checkout no servidor.');
+      }
+
+      if (!db.isSupabaseActive()) {
+        const expiresAt = resData.subscription_expires_at || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+        const registered = await db.registerTenant({
           name: fullName,
           email,
           password,
@@ -102,13 +171,22 @@ export default function Home() {
           niche,
           plan: selectedPlan
         });
+
+        await db.updateTenant(registered.tenant.id, {
+          subscription_status: paymentMethod === 'pix' ? 'inactive' : 'active',
+          subscription_expires_at: expiresAt
+        });
       }
 
-      setCheckoutStep(3);
+      if (paymentMethod === 'pix') {
+        setPixData(resData.pixData);
+      }
+
+      setCheckoutStep(4); // Show success view
     } catch (err: any) {
       console.error(err);
-      setCheckoutError(err.message || 'Ocorreu um erro no processamento. Tente novamente.');
-      setCheckoutStep(1);
+      setCheckoutError(err.message || 'Ocorreu um erro ao processar a assinatura. Verifique os dados e tente novamente.');
+      setCheckoutStep(2); // Fallback back to payment form
     }
   };
 
@@ -678,30 +756,228 @@ export default function Home() {
                     type="submit"
                     className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold cursor-pointer transition-all shadow-lg shadow-blue-500/20"
                   >
-                    Confirmar e Ativar Agenda
+                    Prosseguir para o Pagamento
                   </button>
                 </div>
               </form>
             )}
 
-            {/* Step 2: Processing Payment & Database setup */}
+            {/* Step 2: Payment Form */}
             {checkoutStep === 2 && (
+              <form onSubmit={handleFinalizeSubscription} className="p-6 space-y-6">
+                <div className="p-4 rounded-2xl border border-blue-500/20 bg-blue-500/5 flex justify-between items-center">
+                  <div>
+                    <span className="text-[10px] text-blue-400 font-bold uppercase tracking-wider">Plano Selecionado</span>
+                    <h4 className="font-bold text-sm text-zinc-100">
+                      {selectedPlan === 'enterprise' ? 'Plano Empresarial - Liberação Total' : 'Plano Pessoal - Ativação Simples'}
+                    </h4>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-xl font-black text-zinc-50">
+                      {selectedPlan === 'enterprise' ? 'R$ 94,90' : 'R$ 29,90'}
+                    </span>
+                    <span className="text-[10px] text-zinc-500 font-medium">/mês</span>
+                  </div>
+                </div>
+
+                {checkoutError && (
+                  <div className="p-4 rounded-xl bg-red-500/10 border border-red-500/25 flex items-start gap-2.5 text-xs text-red-400">
+                    <AlertCircle size={16} className="mt-0.5 shrink-0" />
+                    <span>{checkoutError}</span>
+                  </div>
+                )}
+
+                <div className="space-y-4">
+                  <h5 className="text-xs font-bold text-zinc-400 uppercase tracking-widest border-b border-zinc-800/80 pb-2">
+                    Escolha a Forma de Pagamento
+                  </h5>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setPaymentMethod('credit_card')}
+                      className={`py-3 px-4 rounded-xl border text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                        paymentMethod === 'credit_card'
+                          ? 'border-blue-500 bg-blue-500/10 text-blue-400'
+                          : 'border-zinc-800 hover:border-zinc-700 text-zinc-400'
+                      }`}
+                    >
+                      💳 Cartão de Crédito
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPaymentMethod('pix')}
+                      className={`py-3 px-4 rounded-xl border text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                        paymentMethod === 'pix'
+                          ? 'border-blue-500 bg-blue-500/10 text-blue-400'
+                          : 'border-zinc-800 hover:border-zinc-700 text-zinc-400'
+                      }`}
+                    >
+                      ⚡ Pix Instantâneo
+                    </button>
+                  </div>
+
+                  {paymentMethod === 'credit_card' ? (
+                    <div className="space-y-4 pt-2">
+                      <div>
+                        <label className="block text-[11px] font-semibold text-zinc-400 mb-1.5">Número do Cartão</label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="0000 0000 0000 0000"
+                          value={cardNumber}
+                          onChange={(e) => setCardNumber(e.target.value.replace(/\D/g, '').replace(/(\d{4})/g, '$1 ').trim())}
+                          maxLength={19}
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2.5 px-3 text-xs text-zinc-200 placeholder-zinc-700 focus:outline-none focus:border-blue-500 transition-colors"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-semibold text-zinc-400 mb-1.5">Nome do Titular (como no cartão)</label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="EX: CARLOS OLIVEIRA"
+                          value={cardholderName}
+                          onChange={(e) => setCardholderName(e.target.value.toUpperCase())}
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2.5 px-3 text-xs text-zinc-200 placeholder-zinc-700 focus:outline-none focus:border-blue-500 transition-colors"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-[11px] font-semibold text-zinc-400 mb-1.5">Validade (MM/AA)</label>
+                          <input
+                            type="text"
+                            required
+                            placeholder="MM/AA"
+                            value={cardExpiry}
+                            onChange={(e) => {
+                              let val = e.target.value.replace(/\D/g, '');
+                              if (val.length > 2) val = val.substring(0, 2) + '/' + val.substring(2, 4);
+                              setCardExpiry(val);
+                            }}
+                            maxLength={5}
+                            className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2.5 px-3 text-xs text-zinc-200 placeholder-zinc-700 focus:outline-none focus:border-blue-500 text-center transition-colors"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-semibold text-zinc-400 mb-1.5">Código CVV</label>
+                          <input
+                            type="password"
+                            required
+                            placeholder="123"
+                            value={cardCvv}
+                            onChange={(e) => setCardCvv(e.target.value.replace(/\D/g, ''))}
+                            maxLength={4}
+                            className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2.5 px-3 text-xs text-zinc-200 placeholder-zinc-700 focus:outline-none focus:border-blue-500 text-center transition-colors"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-semibold text-zinc-400 mb-1.5">CPF do Titular</label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="000.000.000-00"
+                          value={cardCpf}
+                          onChange={(e) => {
+                            let val = e.target.value.replace(/\D/g, '');
+                            if (val.length > 9) val = val.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4');
+                            else if (val.length > 6) val = val.replace(/(\d{3})(\d{3})(\d{0,3})/, '$1.$2.$3');
+                            else if (val.length > 3) val = val.replace(/(\d{3})(\d{0,3})/, '$1.$2');
+                            setCardCpf(val);
+                          }}
+                          maxLength={14}
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2.5 px-3 text-xs text-zinc-200 placeholder-zinc-700 focus:outline-none focus:border-blue-500 transition-colors"
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-4 pt-2">
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-[11px] font-semibold text-zinc-400 mb-1.5">Nome</label>
+                          <input
+                            type="text"
+                            required
+                            placeholder="Carlos"
+                            value={pixFirstName}
+                            onChange={(e) => setPixFirstName(e.target.value)}
+                            className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2.5 px-3 text-xs text-zinc-200 placeholder-zinc-700 focus:outline-none focus:border-blue-500 transition-colors"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-semibold text-zinc-400 mb-1.5">Sobrenome</label>
+                          <input
+                            type="text"
+                            required
+                            placeholder="Oliveira"
+                            value={pixLastName}
+                            onChange={(e) => setPixLastName(e.target.value)}
+                            className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2.5 px-3 text-xs text-zinc-200 placeholder-zinc-700 focus:outline-none focus:border-blue-500 transition-colors"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-semibold text-zinc-400 mb-1.5">CPF do Pagador</label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="000.000.000-00"
+                          value={pixCpf}
+                          onChange={(e) => {
+                            let val = e.target.value.replace(/\D/g, '');
+                            if (val.length > 9) val = val.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4');
+                            else if (val.length > 6) val = val.replace(/(\d{3})(\d{3})(\d{0,3})/, '$1.$2.$3');
+                            else if (val.length > 3) val = val.replace(/(\d{3})(\d{0,3})/, '$1.$2');
+                            setPixCpf(val);
+                          }}
+                          maxLength={14}
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2.5 px-3 text-xs text-zinc-200 placeholder-zinc-700 focus:outline-none focus:border-blue-500 transition-colors"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="border-t border-zinc-800/80 pt-4 flex gap-3 justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setCheckoutStep(1)}
+                    className="px-5 py-2.5 border border-zinc-800 text-zinc-400 hover:text-zinc-200 rounded-xl hover:bg-zinc-800 text-xs font-semibold cursor-pointer transition-colors"
+                  >
+                    Voltar
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold cursor-pointer transition-all shadow-lg shadow-blue-500/20"
+                  >
+                    Finalizar Assinatura
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {/* Step 3: Processing loader */}
+            {checkoutStep === 3 && (
               <div className="p-12 text-center flex flex-col items-center justify-center space-y-6">
                 <div className="relative w-20 h-20">
-                  {/* Glowing spinner animations */}
                   <div className="absolute inset-0 rounded-full border-4 border-blue-500/20 border-t-blue-500 animate-spin" />
                   <div className="absolute inset-2 rounded-full border-4 border-purple-500/10 border-t-purple-500 animate-spin duration-1000" />
                 </div>
                 
                 <div>
-                  <h4 className="font-bold text-md text-zinc-100">Configurando sua Plataforma</h4>
+                  <h4 className="font-bold text-md text-zinc-100">Processando com Mercado Pago</h4>
                   <p className="text-xs text-zinc-500 mt-2 animate-pulse">{loadingMessage}</p>
                 </div>
               </div>
             )}
 
-            {/* Step 3: Success Screen */}
-            {checkoutStep === 3 && (
+            {/* Step 4: Success Screen */}
+            {checkoutStep === 4 && (
               <div className="p-10 text-center flex flex-col items-center justify-center space-y-6 animate-in scale-in duration-200">
                 <div className="w-16 h-16 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 shadow-lg shadow-emerald-500/5">
                   <CheckCircle2 size={32} />
@@ -710,9 +986,52 @@ export default function Home() {
                 <div>
                   <h4 className="font-black text-xl text-zinc-50">Plataforma Ativada com Sucesso!</h4>
                   <p className="text-xs text-zinc-400 mt-2 max-w-sm mx-auto">
-                    Parabéns! Sua assinatura foi confirmada. O estabelecimento <strong>{businessName}</strong> foi cadastrado e sua agenda está ativa e pronta para receber agendamentos.
+                    {paymentMethod === 'pix'
+                      ? 'Seu código de pagamento Pix foi gerado. Efetue o pagamento para concluir a liberação permanente da sua agenda.'
+                      : `Parabéns! Sua assinatura foi confirmada no cartão de crédito. O estabelecimento ${businessName} está totalmente ativo.`}
                   </p>
                 </div>
+
+                {paymentMethod === 'pix' && pixData && (
+                  <div className="p-5 rounded-2xl border border-zinc-800 bg-zinc-950/60 max-w-md w-full flex flex-col items-center gap-4">
+                    <span className="text-[10px] text-zinc-450 uppercase tracking-widest font-bold">Pague com Pix</span>
+                    
+                    {pixData.qr_code_base64 && (
+                      <div className="p-2.5 bg-white rounded-xl shadow-lg">
+                        <img
+                          src={`data:image/png;base64,${pixData.qr_code_base64}`}
+                          alt="Pix QR Code"
+                          className="w-40 h-40"
+                        />
+                      </div>
+                    )}
+                    
+                    <div className="w-full space-y-2">
+                      <label className="block text-[10px] font-bold text-zinc-500 text-left">Código Pix Copia e Cola:</label>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          readOnly
+                          value={pixData.qr_code || ''}
+                          className="flex-1 bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-[10px] text-zinc-400 font-mono focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (pixData.qr_code) {
+                              navigator.clipboard.writeText(pixData.qr_code);
+                              setPixCopied(true);
+                              setTimeout(() => setPixCopied(false), 2000);
+                            }
+                          }}
+                          className="px-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-lg text-xs font-bold transition-all border border-zinc-700/50 shrink-0"
+                        >
+                          {pixCopied ? 'Copiado!' : 'Copiar'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-950/50 text-xs text-zinc-400 max-w-md w-full text-left space-y-2">
                   <div className="flex justify-between">
@@ -730,6 +1049,43 @@ export default function Home() {
                     <span className="text-zinc-200 font-semibold">{email}</span>
                   </div>
                 </div>
+
+                {/* PWA Install Widget on Success Screen */}
+                {isInstallable && !pwaInstalled && (
+                  <div className="p-5 rounded-2xl border border-blue-500/20 bg-gradient-to-br from-blue-950/20 to-zinc-900/50 max-w-md w-full text-left space-y-3">
+                    <div className="flex items-center gap-2 text-blue-400">
+                      <Sparkle size={18} className="animate-pulse" />
+                      <h5 className="font-bold text-xs uppercase tracking-wider font-sans">Slotfy App Instalável</h5>
+                    </div>
+                    <p className="text-[11px] text-zinc-400 leading-relaxed">
+                      Instale o Slotfy no seu celular ou computador para acessar o painel de forma instantânea a partir de um ícone na tela inicial.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const success = await installApp();
+                        if (success) setPwaInstalled(true);
+                      }}
+                      className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-lg shadow-blue-500/10 border border-blue-500/30"
+                    >
+                      Instalar Aplicativo
+                    </button>
+                  </div>
+                )}
+
+                {isIOS && (
+                  <div className="p-5 rounded-2xl border border-blue-500/20 bg-gradient-to-br from-blue-950/20 to-zinc-900/50 max-w-md w-full text-left space-y-2">
+                    <div className="flex items-center gap-2 text-blue-400">
+                      <Sparkle size={18} />
+                      <h5 className="font-bold text-xs uppercase tracking-wider">Instalar no iOS (iPhone / iPad)</h5>
+                    </div>
+                    <p className="text-[11px] text-zinc-400 leading-relaxed">
+                      1. Toque no botão de <strong>Compartilhar</strong> <span className="text-zinc-300">📤</span> na barra inferior do Safari.<br />
+                      2. Role as opções e selecione <strong>Adicionar à Tela de Início</strong>.<br />
+                      3. Toque em <strong>Adicionar</strong> no canto superior direito para confirmar.
+                    </p>
+                  </div>
+                )}
 
                 <div className="pt-2 w-full max-w-xs">
                   <Link

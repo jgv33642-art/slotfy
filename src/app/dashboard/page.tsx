@@ -25,15 +25,45 @@ import {
   MapPin,
   Globe,
   FileText,
-  Tag
+  Tag,
+  AlertCircle,
+  CreditCard,
+  Sparkles
 } from 'lucide-react';
 import Link from 'next/link';
+import { usePWA } from '../../components/PWAProvider';
 
 export default function AdminDashboard() {
   const [session, setSession] = useState<{ tenant?: Tenant; profile?: any }>({});
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [services, setServices] = useState<Service[]>([]);
   const [allTenants, setAllTenants] = useState<Tenant[]>([]);
+
+  // PWA States
+  const { isInstallable, installApp, isIOS } = usePWA();
+  const [pwaInstalled, setPwaInstalled] = useState(false);
+
+  // Renewal checkout states
+  const [showRenewalOverlay, setShowRenewalOverlay] = useState(false);
+  const [renewalPlan, setRenewalPlan] = useState<'personal' | 'enterprise'>('personal');
+  const [renewalStep, setRenewalStep] = useState(1); // 1 = Form, 2 = Processing, 3 = Success
+  const [renewalError, setRenewalError] = useState('');
+  const [renewalPaymentMethod, setRenewalPaymentMethod] = useState<'credit_card' | 'pix'>('credit_card');
+  const [renewalLoadingMsg, setRenewalLoadingMsg] = useState('');
+
+  // Renewal credit card state
+  const [renewalCardNumber, setRenewalCardNumber] = useState('');
+  const [renewalCardholderName, setRenewalCardholderName] = useState('');
+  const [renewalCardExpiry, setRenewalCardExpiry] = useState('');
+  const [renewalCardCvv, setRenewalCardCvv] = useState('');
+  const [renewalCardCpf, setRenewalCardCpf] = useState('');
+
+  // Renewal Pix state
+  const [renewalPixFirstName, setRenewalPixFirstName] = useState('');
+  const [renewalPixLastName, setRenewalPixLastName] = useState('');
+  const [renewalPixCpf, setRenewalPixCpf] = useState('');
+  const [renewalPixData, setRenewalPixData] = useState<any>(null);
+  const [renewalPixCopied, setRenewalPixCopied] = useState(false);
   
   // Tabs: 'appointments' | 'services' | 'hours' | 'settings' | 'professionals' | 'crm'
   const [activeTab, setActiveTab] = useState<'appointments' | 'services' | 'hours' | 'settings' | 'professionals' | 'crm' | 'analytics'>('appointments');
@@ -113,6 +143,28 @@ export default function AdminDashboard() {
   useEffect(() => {
     loadDashboardData();
   }, []);
+
+  useEffect(() => {
+    if (session.tenant) {
+      setRenewalPlan(session.tenant.plan_type || 'personal');
+    }
+  }, [session.tenant]);
+
+  const isSubscriptionExpired = () => {
+    if (!session.tenant) return false;
+    if (session.tenant.subscription_status === 'inactive') return true;
+    if (!session.tenant.subscription_expires_at) return false;
+    const expiry = new Date(session.tenant.subscription_expires_at).getTime();
+    return Date.now() > expiry;
+  };
+
+  const getSubscriptionRemainingDays = () => {
+    if (!session.tenant || !session.tenant.subscription_expires_at) return 999;
+    const expiry = new Date(session.tenant.subscription_expires_at).getTime();
+    const diffTime = expiry - Date.now();
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    return diffDays;
+  };
 
   const handleTenantSwitch = async (tenantId: string) => {
     await db.switchSessionTenant(tenantId);
@@ -436,6 +488,129 @@ export default function AdminDashboard() {
     setUpgradeStep(2);
   };
 
+  const handleConfirmPixDemo = async () => {
+    if (!session.tenant) return;
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    db.updateTenant(session.tenant.id, {
+      plan_type: renewalPlan,
+      subscription_status: 'active',
+      subscription_expires_at: expiresAt
+    });
+    alert("Simulação: Pix detectado e aprovado com sucesso!");
+    setShowRenewalOverlay(false);
+    await loadDashboardData();
+  };
+
+  const handleRenewalSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setRenewalError('');
+    setRenewalStep(2);
+    setRenewalLoadingMsg('Iniciando transação segura de renovação...');
+
+    try {
+      let cardToken = '';
+      let detectedBrand = 'visa';
+
+      if (renewalPaymentMethod === 'credit_card') {
+        setRenewalLoadingMsg('Gerando token do cartão de crédito...');
+        const cleanCard = renewalCardNumber.replace(/\s+/g, '');
+        const cleanCpf = renewalCardCpf.replace(/\D/g, '');
+
+        if (cleanCard.startsWith('4')) detectedBrand = 'visa';
+        else if (/^(5[1-5]|222[1-9]|22[3-9][0-9])/.test(cleanCard)) detectedBrand = 'master';
+        else if (/^(34|37)/.test(cleanCard)) detectedBrand = 'amex';
+        else if (/^(4011|4312|4389|4514|5041|5066|5090|6277|6362|6363|6504|6505|6507|6509|6516)/.test(cleanCard)) detectedBrand = 'elo';
+        else if (/^(6062|6503|6504|6505|6511)/.test(cleanCard)) detectedBrand = 'hipercard';
+
+        const [expiryMonthStr, expiryYearStr] = renewalCardExpiry.split('/');
+        if (!expiryMonthStr || !expiryYearStr) {
+          throw new Error('Data de expiração do cartão inválida. Use o formato MM/AA.');
+        }
+
+        const expiryMonth = parseInt(expiryMonthStr, 10);
+        let expiryYear = parseInt(expiryYearStr, 10);
+        if (expiryYear < 100) expiryYear += 2000;
+
+        const tokenRes = await fetch('https://api.mercadopago.com/v1/card_tokens?public_key=APP_USR-2da670ce-3266-445e-8233-a117d3422961', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            card_number: cleanCard,
+            expiration_month: expiryMonth,
+            expiration_year: expiryYear,
+            security_code: renewalCardCvv,
+            cardholder: {
+              name: renewalCardholderName,
+              identification: {
+                type: 'CPF',
+                number: cleanCpf
+              }
+            }
+          })
+        });
+
+        if (!tokenRes.ok) {
+          const errData = await tokenRes.json();
+          console.error("Mercado Pago Card Token Generation failed:", errData);
+          throw new Error(errData.message || 'Erro ao validar os dados do seu cartão. Verifique e tente novamente.');
+        }
+
+        const tokenData = await tokenRes.json();
+        cardToken = tokenData.id;
+      }
+
+      setRenewalLoadingMsg('Processando renovação de assinatura...');
+
+      const response = await fetch('/api/checkout/renew', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          tenantId: session.tenant?.id,
+          email: session.profile?.email || 'financeiro@slotfy.com',
+          plan: renewalPlan,
+          paymentMethod: renewalPaymentMethod,
+          cardToken,
+          paymentMethodId: detectedBrand,
+          pixFirstName: renewalPixFirstName,
+          pixLastName: renewalPixLastName,
+          pixCpf: renewalPixCpf,
+          isLocalStorageFallback: !db.isSupabaseActive()
+        })
+      });
+
+      const resData = await response.json();
+      if (!response.ok) {
+        throw new Error(resData.error || 'Erro ao processar renovação no servidor.');
+      }
+
+      if (!db.isSupabaseActive()) {
+        const expiresAt = resData.subscription_expires_at || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+        db.updateTenant(session.tenant!.id, {
+          plan_type: renewalPlan,
+          subscription_status: renewalPaymentMethod === 'pix' ? 'inactive' : 'active',
+          subscription_expires_at: expiresAt
+        });
+      }
+
+      if (renewalPaymentMethod === 'pix') {
+        setRenewalPixData(resData.pixData);
+        setRenewalStep(3);
+      } else {
+        alert("Assinatura renovada com sucesso!");
+        setShowRenewalOverlay(false);
+        await loadDashboardData();
+      }
+    } catch (err: any) {
+      console.error(err);
+      setRenewalError(err.message || 'Erro ao processar renovação. Tente novamente.');
+      setRenewalStep(1);
+    }
+  };
+
   if (!session.tenant) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-zinc-950 text-white">
@@ -467,9 +642,28 @@ export default function AdminDashboard() {
   };
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100 font-sans flex flex-col md:flex-row">
-      
-      {/* Sidebar */}
+    <div className="min-h-screen bg-zinc-950 text-zinc-100 font-sans flex flex-col">
+      {/* 3-day warning banner at the top of the dashboard */}
+      {session.tenant && !isSubscriptionExpired() && getSubscriptionRemainingDays() >= 0 && getSubscriptionRemainingDays() <= 3 && (
+        <div className="bg-amber-500 text-zinc-950 font-bold text-center text-xs py-2.5 px-4 flex items-center justify-center gap-2 animate-in slide-in-from-top duration-300 z-40 shrink-0">
+          <AlertCircle size={16} />
+          <span>Sua assinatura expira em {getSubscriptionRemainingDays()} dia(s). Renove agora para manter sua agenda ativa!</span>
+          <button
+            onClick={() => {
+              setRenewalPlan(session.tenant?.plan_type || 'personal');
+              setRenewalStep(1);
+              setRenewalError('');
+              setShowRenewalOverlay(true);
+            }}
+            className="underline hover:text-black ml-2 font-black transition-colors"
+          >
+            Renovar Assinatura
+          </button>
+        </div>
+      )}
+
+      <div className="flex flex-col md:flex-row flex-1">
+        {/* Sidebar */}
       <aside className="w-full md:w-64 bg-zinc-900/50 border-r border-zinc-800/80 p-6 flex flex-col justify-between">
         <div>
           {/* Logo / Switcher */}
@@ -635,6 +829,43 @@ export default function AdminDashboard() {
         {/* Tab content 1: Appointments */}
         {activeTab === 'appointments' && (
           <div className="animate-in fade-in duration-300">
+            {/* PWA Banner Option */}
+            {isInstallable && !pwaInstalled && (
+              <div className="mb-6 p-6 rounded-2xl border border-blue-500/20 bg-gradient-to-br from-blue-900/10 via-zinc-900/40 to-zinc-900/80 backdrop-blur-md flex flex-col md:flex-row items-start md:items-center justify-between gap-4 animate-in fade-in slide-in-from-top duration-300">
+                <div className="space-y-1 max-w-xl">
+                  <div className="flex items-center gap-2 text-blue-400">
+                    <Smartphone size={18} className="animate-pulse" />
+                    <span className="text-xs font-bold uppercase tracking-wider font-sans">Aplicativo Slotfy Instalável</span>
+                  </div>
+                  <p className="text-xs text-zinc-300">
+                    Instale o Slotfy no seu dispositivo para ter acesso instantâneo ao seu painel administrativo, receber notificações e gerenciar sua agenda diretamente da tela inicial.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const success = await installApp();
+                    if (success) setPwaInstalled(true);
+                  }}
+                  className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-lg shadow-blue-500/15 border border-blue-500/30 whitespace-nowrap"
+                >
+                  Instalar no Aparelho
+                </button>
+              </div>
+            )}
+
+            {isIOS && (
+              <div className="mb-6 p-6 rounded-2xl border border-blue-500/20 bg-gradient-to-br from-blue-900/10 via-zinc-900/40 to-zinc-900/80 backdrop-blur-md flex flex-col gap-2 animate-in fade-in slide-in-from-top duration-300">
+                <div className="flex items-center gap-2 text-blue-400">
+                  <Smartphone size={18} />
+                  <span className="text-xs font-bold uppercase tracking-wider">Instalar no iOS (iPhone / iPad)</span>
+                </div>
+                <p className="text-xs text-zinc-300 leading-relaxed">
+                  Para instalar o Slotfy no seu iPhone: toque no ícone de compartilhar <span className="text-zinc-400">📤</span> no Safari, role a tela e selecione <strong>Adicionar à Tela de Início</strong>.
+                </p>
+              </div>
+            )}
+
             <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
               <CalendarIcon size={18} className="text-blue-500" />
               Lista de Agendamentos
@@ -1690,6 +1921,348 @@ export default function AdminDashboard() {
           </div>
         </div>
       )}
+
+      {/* Renewal Overlay */}
+      {(isSubscriptionExpired() || showRenewalOverlay) && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-zinc-950/85 backdrop-blur-xl animate-in fade-in duration-300 overflow-y-auto">
+          <div className="w-full max-w-lg bg-zinc-900 border border-zinc-800 rounded-3xl overflow-hidden shadow-2xl relative my-8 animate-in zoom-in-95 duration-200">
+            {/* Ambient lighting */}
+            <div className="absolute top-0 right-0 w-[180px] h-[180px] bg-blue-600/10 rounded-full blur-[60px] pointer-events-none" />
+            
+            {/* Header */}
+            <div className="border-b border-zinc-800 px-6 py-5 flex justify-between items-center bg-zinc-900/50">
+              <div>
+                <h3 className="font-black text-lg text-zinc-50 flex items-center gap-2">
+                  <Sparkles className="text-blue-500 fill-blue-500/20" size={18} />
+                  {isSubscriptionExpired() ? 'Assinatura Expirada' : 'Renovar Assinatura'}
+                </h3>
+                <p className="text-xs text-zinc-500 mt-0.5">
+                  {isSubscriptionExpired() 
+                    ? 'Sua agenda está suspensa. Renove agora para reativar seu acesso.' 
+                    : 'Renove antecipadamente para evitar qualquer interrupção dos seus agendamentos.'}
+                </p>
+              </div>
+              {!isSubscriptionExpired() && (
+                <button
+                  type="button"
+                  onClick={() => setShowRenewalOverlay(false)}
+                  className="p-1.5 text-zinc-400 hover:text-zinc-200 rounded-xl hover:bg-zinc-800 cursor-pointer transition-colors"
+                >
+                  <X size={18} />
+                </button>
+              )}
+            </div>
+
+            {renewalStep === 1 && (
+              <form onSubmit={handleRenewalSubmit} className="p-6 space-y-6">
+                {renewalError && (
+                  <div className="p-4 rounded-xl bg-red-500/10 border border-red-500/25 flex items-start gap-2.5 text-xs text-red-400">
+                    <AlertCircle size={16} className="mt-0.5 shrink-0" />
+                    <span>{renewalError}</span>
+                  </div>
+                )}
+
+                {/* Plan Selection */}
+                <div className="space-y-3">
+                  <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-wider">Escolha seu Plano</label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setRenewalPlan('personal')}
+                      className={`p-4 rounded-2xl border text-left transition-all cursor-pointer ${
+                        renewalPlan === 'personal'
+                          ? 'border-blue-500 bg-blue-500/5 text-zinc-250 shadow-md shadow-blue-500/5'
+                          : 'border-zinc-850 bg-zinc-950/20 hover:border-zinc-800 text-zinc-400'
+                      }`}
+                    >
+                      <span className="font-bold text-xs block text-zinc-100">Pessoal</span>
+                      <span className="text-[10px] block text-zinc-500 mt-1">1 Profissional Ativo</span>
+                      <span className="text-sm font-black text-blue-400 mt-2 block">R$ 29,90/mês</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRenewalPlan('enterprise')}
+                      className={`p-4 rounded-2xl border text-left transition-all cursor-pointer ${
+                        renewalPlan === 'enterprise'
+                          ? 'border-blue-500 bg-blue-500/5 text-zinc-250 shadow-md shadow-blue-500/5'
+                          : 'border-zinc-850 bg-zinc-950/20 hover:border-zinc-800 text-zinc-400'
+                      }`}
+                    >
+                      <span className="font-bold text-xs block text-zinc-100">Empresarial</span>
+                      <span className="text-[10px] block text-zinc-500 mt-1">Múltiplos Profissionais, CRM</span>
+                      <span className="text-sm font-black text-blue-400 mt-2 block">R$ 94,90/mês</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Payment Method Selector */}
+                <div className="space-y-3">
+                  <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-wider">Forma de Pagamento</label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setRenewalPaymentMethod('credit_card')}
+                      className={`py-3 px-4 rounded-xl border text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                        renewalPaymentMethod === 'credit_card'
+                          ? 'border-blue-500 bg-blue-500/10 text-blue-400'
+                          : 'border-zinc-800 hover:border-zinc-700 text-zinc-400'
+                      }`}
+                    >
+                      💳 Cartão de Crédito
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRenewalPaymentMethod('pix')}
+                      className={`py-3 px-4 rounded-xl border text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                        renewalPaymentMethod === 'pix'
+                          ? 'border-blue-500 bg-blue-500/10 text-blue-400'
+                          : 'border-zinc-800 hover:border-zinc-700 text-zinc-400'
+                      }`}
+                    >
+                      ⚡ Pix Instantâneo
+                    </button>
+                  </div>
+                </div>
+
+                {/* Forms content */}
+                {renewalPaymentMethod === 'credit_card' ? (
+                  <div className="space-y-4 pt-2">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-zinc-400 mb-1.5">Número do Cartão</label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="0000 0000 0000 0000"
+                        value={renewalCardNumber}
+                        onChange={(e) => setRenewalCardNumber(e.target.value.replace(/\D/g, '').replace(/(\d{4})/g, '$1 ').trim())}
+                        maxLength={19}
+                        className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2.5 px-3 text-xs text-zinc-200 placeholder-zinc-700 focus:outline-none focus:border-blue-500 transition-colors"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-semibold text-zinc-400 mb-1.5">Nome do Titular (como no cartão)</label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="EX: CARLOS OLIVEIRA"
+                        value={renewalCardholderName}
+                        onChange={(e) => setRenewalCardholderName(e.target.value.toUpperCase())}
+                        className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2.5 px-3 text-xs text-zinc-200 placeholder-zinc-700 focus:outline-none focus:border-blue-500 transition-colors"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-[11px] font-semibold text-zinc-400 mb-1.5">Validade (MM/AA)</label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="MM/AA"
+                          value={renewalCardExpiry}
+                          onChange={(e) => {
+                            let val = e.target.value.replace(/\D/g, '');
+                            if (val.length > 2) val = val.substring(0, 2) + '/' + val.substring(2, 4);
+                            setRenewalCardExpiry(val);
+                          }}
+                          maxLength={5}
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2.5 px-3 text-xs text-zinc-200 placeholder-zinc-700 focus:outline-none focus:border-blue-500 text-center transition-colors"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-semibold text-zinc-400 mb-1.5">Código CVV</label>
+                        <input
+                          type="password"
+                          required
+                          placeholder="123"
+                          value={renewalCardCvv}
+                          onChange={(e) => setRenewalCardCvv(e.target.value.replace(/\D/g, ''))}
+                          maxLength={4}
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2.5 px-3 text-xs text-zinc-200 placeholder-zinc-700 focus:outline-none focus:border-blue-500 text-center transition-colors"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-semibold text-zinc-400 mb-1.5">CPF do Titular</label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="000.000.000-00"
+                        value={renewalCardCpf}
+                        onChange={(e) => {
+                          let val = e.target.value.replace(/\D/g, '');
+                          if (val.length > 9) val = val.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4');
+                          else if (val.length > 6) val = val.replace(/(\d{3})(\d{3})(\d{0,3})/, '$1.$2.$3');
+                          else if (val.length > 3) val = val.replace(/(\d{3})(\d{0,3})/, '$1.$2');
+                          setRenewalCardCpf(val);
+                        }}
+                        maxLength={14}
+                        className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2.5 px-3 text-xs text-zinc-200 placeholder-zinc-700 focus:outline-none focus:border-blue-500 transition-colors"
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-4 pt-2">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-[11px] font-semibold text-zinc-400 mb-1.5">Nome</label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="Carlos"
+                          value={renewalPixFirstName}
+                          onChange={(e) => setRenewalPixFirstName(e.target.value)}
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2.5 px-3 text-xs text-zinc-200 placeholder-zinc-700 focus:outline-none focus:border-blue-500 transition-colors"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-semibold text-zinc-400 mb-1.5">Sobrenome</label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="Oliveira"
+                          value={renewalPixLastName}
+                          onChange={(e) => setRenewalPixLastName(e.target.value)}
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2.5 px-3 text-xs text-zinc-200 placeholder-zinc-700 focus:outline-none focus:border-blue-500 transition-colors"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-semibold text-zinc-400 mb-1.5">CPF do Pagador</label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="000.000.000-00"
+                        value={renewalPixCpf}
+                        onChange={(e) => {
+                          let val = e.target.value.replace(/\D/g, '');
+                          if (val.length > 9) val = val.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4');
+                          else if (val.length > 6) val = val.replace(/(\d{3})(\d{3})(\d{0,3})/, '$1.$2.$3');
+                          else if (val.length > 3) val = val.replace(/(\d{3})(\d{0,3})/, '$1.$2');
+                          setRenewalPixCpf(val);
+                        }}
+                        maxLength={14}
+                        className="w-full bg-zinc-950 border border-zinc-800 rounded-xl py-2.5 px-3 text-xs text-zinc-200 placeholder-zinc-700 focus:outline-none focus:border-blue-500 transition-colors"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <div className="border-t border-zinc-800 pt-4 flex justify-end gap-3">
+                  {!isSubscriptionExpired() && (
+                    <button
+                      type="button"
+                      onClick={() => setShowRenewalOverlay(false)}
+                      className="px-5 py-2.5 border border-zinc-800 text-zinc-400 hover:text-zinc-200 rounded-xl hover:bg-zinc-800 text-xs font-semibold cursor-pointer transition-colors"
+                    >
+                      Cancelar
+                    </button>
+                  )}
+                  <button
+                    type="submit"
+                    className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold cursor-pointer transition-all shadow-lg shadow-blue-500/20"
+                  >
+                    Renovar Agora
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {renewalStep === 2 && (
+              <div className="p-12 text-center flex flex-col items-center justify-center space-y-6">
+                <div className="relative w-20 h-20">
+                  <div className="absolute inset-0 rounded-full border-4 border-blue-500/20 border-t-blue-500 animate-spin" />
+                  <div className="absolute inset-2 rounded-full border-4 border-purple-500/10 border-t-purple-500 animate-spin duration-1000" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-md text-zinc-100">Processando com Mercado Pago</h4>
+                  <p className="text-xs text-zinc-500 mt-2 animate-pulse">{renewalLoadingMsg}</p>
+                </div>
+              </div>
+            )}
+
+            {renewalStep === 3 && renewalPaymentMethod === 'pix' && renewalPixData && (
+              <div className="p-6 text-center flex flex-col items-center justify-center space-y-6 animate-in scale-in duration-200">
+                <div className="w-16 h-16 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 shadow-lg shadow-emerald-500/5">
+                  <CheckCircle size={32} />
+                </div>
+                
+                <div>
+                  <h4 className="font-black text-lg text-zinc-50">Código Pix de Renovação Gerado</h4>
+                  <p className="text-xs text-zinc-400 mt-1 max-w-sm mx-auto">
+                    Realize o pagamento do Pix copia e cola abaixo. O acesso de sua agenda será liberado instantaneamente assim que compensado.
+                  </p>
+                </div>
+
+                <div className="p-5 rounded-2xl border border-zinc-800 bg-zinc-950/60 w-full flex flex-col items-center gap-4">
+                  {renewalPixData.qr_code_base64 && (
+                    <div className="p-2.5 bg-white rounded-xl shadow-lg">
+                      <img
+                        src={`data:image/png;base64,${renewalPixData.qr_code_base64}`}
+                        alt="Pix QR Code"
+                        className="w-40 h-40"
+                      />
+                    </div>
+                  )}
+                  
+                  <div className="w-full space-y-2 text-left">
+                    <label className="block text-[10px] font-bold text-zinc-500">Código Pix Copia e Cola:</label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        readOnly
+                        value={renewalPixData.qr_code || ''}
+                        className="flex-1 bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-[10px] text-zinc-400 font-mono focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (renewalPixData.qr_code) {
+                            navigator.clipboard.writeText(renewalPixData.qr_code);
+                            setRenewalPixCopied(true);
+                            setTimeout(() => setRenewalPixCopied(false), 2000);
+                          }
+                        }}
+                        className="px-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-lg text-xs font-bold transition-all border border-zinc-700/50 shrink-0"
+                      >
+                        {renewalPixCopied ? 'Copiado!' : 'Copiar'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Confirm Pix Demo Simulation Button for Sandbox testing */}
+                {!db.isSupabaseActive() && (
+                  <button
+                    type="button"
+                    onClick={handleConfirmPixDemo}
+                    className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all"
+                  >
+                    Simular Aprovação do Pix (Modo Sandbox)
+                  </button>
+                )}
+
+                <div className="pt-2 w-full">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setShowRenewalOverlay(false);
+                      setRenewalStep(1);
+                      await loadDashboardData();
+                    }}
+                    className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-xs shadow-lg transition-all"
+                  >
+                    Concluir & Fechar
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      </div>
     </div>
   );
 }

@@ -20,6 +20,7 @@ export interface Tenant {
   website_url?: string;
   pix_key?: string;
   success_message?: string;
+  subscription_expires_at?: string;
 }
 
 export interface Profile {
@@ -91,7 +92,8 @@ const MOCK_TENANTS: Tenant[] = [
     description: 'Estilo clássico com técnicas modernas. Atendimento personalizado para o homem contemporâneo.',
     website_url: 'https://barbeariavintage.com.br',
     pix_key: 'financeiro@barbeariavintage.com.br',
-    success_message: 'Por favor, chegue com 10 minutos de antecedência. Em caso de atraso, entre em contato.'
+    success_message: 'Por favor, chegue com 10 minutos de antecedência. Em caso de atraso, entre em contato.',
+    subscription_expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
   },
   {
     id: 't-2',
@@ -114,7 +116,8 @@ const MOCK_TENANTS: Tenant[] = [
     description: 'Cuidando do seu sorriso com dedicação, tecnologia de ponta e profissionais especializados.',
     website_url: 'https://clinicasorrisosaudavel.com.br',
     pix_key: '11888888888',
-    success_message: 'Traga um documento de identidade com foto para a sua consulta de rotina.'
+    success_message: 'Traga um documento de identidade com foto para a sua consulta de rotina.',
+    subscription_expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
   },
   {
     id: 't-3',
@@ -134,7 +137,8 @@ const MOCK_TENANTS: Tenant[] = [
     description: 'Fisioterapia e Pilates clínico para todas as idades. Melhore sua postura e qualidade de vida.',
     website_url: 'https://studiolotus.com.br',
     pix_key: 'lotus@studiolotus.com.br',
-    success_message: 'Use roupas leves e confortáveis para a sua prática de Pilates.'
+    success_message: 'Use roupas leves e confortáveis para a sua prática de Pilates.',
+    subscription_expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
   }
 ];
 
@@ -395,7 +399,10 @@ function loadData(): DBData {
         needsSave = true;
       }
     }
-    return t;
+    if (!t.subscription_expires_at) {
+      t.subscription_expires_at = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+      needsSave = true;
+    }
   });
 
   if (needsSave) {
@@ -625,7 +632,8 @@ export const db = {
       subscription_status: 'active',
       address: params.address,
       plan_type: params.plan === 'enterprise' ? 'enterprise' : 'personal',
-      blocked_dates: []
+      blocked_dates: [],
+      subscription_expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
     };
 
     const profileId = 'u-' + Math.random().toString(36).substr(2, 9);
