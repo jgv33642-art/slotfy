@@ -90,25 +90,29 @@ export default function TimeSlots({
   }
 
   return (
-    <div>
-      <h4 className="text-sm font-semibold text-zinc-800 dark:text-zinc-200 mb-3 flex items-center gap-2">
-        <Clock size={16} className="text-blue-500" />
-        Horários Disponíveis
+    <div className="w-full relative z-10 animate-in fade-in slide-in-from-bottom-3 duration-300">
+      <h4 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-4.5 flex items-center gap-2">
+        <span className="w-4 h-4 rounded-lg bg-[var(--brand-primary)]/10 border border-[var(--brand-primary)]/30 flex items-center justify-center">
+          <Clock size={10} className="text-[var(--brand-primary)]" />
+        </span>
+        Horários Disponíveis para Seleção
       </h4>
-      <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
+      <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2.5">
         {slots.map((time) => {
           const isSelected = selectedTime === time;
           return (
             <button
+              type="button"
               key={time}
               onClick={() => onChange(time)}
               className={`
-                py-2.5 px-4 rounded-xl text-sm font-semibold text-center border transition-all cursor-pointer
+                py-3 px-4 rounded-2xl text-xs font-medium text-center border transition-all duration-200 cursor-pointer hover:scale-[1.03] active:scale-95
                 ${isSelected
-                  ? 'bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-500/20'
-                  : 'bg-white border-zinc-200 text-zinc-700 hover:bg-zinc-50 dark:bg-zinc-900 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-800/80'
+                  ? 'text-white border-transparent font-semibold'
+                  : 'bg-zinc-950/35 border-zinc-850 text-zinc-300 hover:bg-zinc-900/50 hover:text-white hover:border-zinc-700/60'
                 }
               `}
+              style={isSelected ? { backgroundColor: 'var(--brand-primary)', boxShadow: '0 4px 15px -3px var(--brand-primary)' } : {}}
             >
               {time}
             </button>

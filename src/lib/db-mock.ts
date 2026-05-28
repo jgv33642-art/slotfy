@@ -8,6 +8,18 @@ export interface Tenant {
   };
   whatsapp_number: string;
   subscription_status: 'active' | 'inactive' | 'past_due';
+  address?: string;
+  logo_url?: string;
+  primary_color?: string;
+  instagram_handle?: string;
+  facebook_handle?: string;
+  blacklist_numbers?: string[];
+  plan_type?: 'personal' | 'enterprise';
+  blocked_dates?: string[];
+  description?: string;
+  website_url?: string;
+  pix_key?: string;
+  success_message?: string;
 }
 
 export interface Profile {
@@ -28,10 +40,20 @@ export interface Service {
   is_active: boolean;
 }
 
+export interface Professional {
+  id: string;
+  tenant_id: string;
+  name: string;
+  avatar_url?: string;
+  specialty?: string;
+  is_active: boolean;
+}
+
 export interface Appointment {
   id: string;
   tenant_id: string;
   service_id: string;
+  professional_id?: string;
   client_name: string;
   client_phone: string;
   appointment_time: string; // ISO date string
@@ -58,7 +80,18 @@ const MOCK_TENANTS: Tenant[] = [
     niche: 'Beleza e Estética',
     business_hours: DEFAULT_BUSINESS_HOURS,
     whatsapp_number: '+5511999999999',
-    subscription_status: 'active'
+    subscription_status: 'active',
+    address: 'Av. Paulista, 1000 - Bela Vista, São Paulo - SP',
+    primary_color: '#d97706', // amber-600
+    logo_url: 'https://images.unsplash.com/photo-1503951914875-452162b0f3f1?auto=format&fit=crop&w=100&q=80',
+    instagram_handle: 'barbearia_vintage',
+    blacklist_numbers: [],
+    plan_type: 'enterprise',
+    blocked_dates: [],
+    description: 'Estilo clássico com técnicas modernas. Atendimento personalizado para o homem contemporâneo.',
+    website_url: 'https://barbeariavintage.com.br',
+    pix_key: 'financeiro@barbeariavintage.com.br',
+    success_message: 'Por favor, chegue com 10 minutos de antecedência. Em caso de atraso, entre em contato.'
   },
   {
     id: 't-2',
@@ -70,7 +103,18 @@ const MOCK_TENANTS: Tenant[] = [
       saturday: { open: "08:00", close: "12:00", active: false } // closed on Saturdays too
     },
     whatsapp_number: '+5511888888888',
-    subscription_status: 'active'
+    subscription_status: 'active',
+    address: 'Rua Augusta, 500 - Consolação, São Paulo - SP',
+    primary_color: '#059669', // emerald-600
+    logo_url: 'https://images.unsplash.com/photo-1629909613654-28e377c37b09?auto=format&fit=crop&w=100&q=80',
+    instagram_handle: 'sorriso_saudavel',
+    blacklist_numbers: [],
+    plan_type: 'enterprise',
+    blocked_dates: [],
+    description: 'Cuidando do seu sorriso com dedicação, tecnologia de ponta e profissionais especializados.',
+    website_url: 'https://clinicasorrisosaudavel.com.br',
+    pix_key: '11888888888',
+    success_message: 'Traga um documento de identidade com foto para a sua consulta de rotina.'
   },
   {
     id: 't-3',
@@ -79,7 +123,56 @@ const MOCK_TENANTS: Tenant[] = [
     niche: 'Fitness e Bem-Estar',
     business_hours: DEFAULT_BUSINESS_HOURS,
     whatsapp_number: '+5511777777777',
-    subscription_status: 'active'
+    subscription_status: 'active',
+    address: 'Alameda Lorena, 1500 - Jardins, São Paulo - SP',
+    primary_color: '#2563eb', // blue-600
+    logo_url: 'https://images.unsplash.com/photo-1518611012118-696072aa579a?auto=format&fit=crop&w=100&q=80',
+    instagram_handle: 'lotus_pilates',
+    blacklist_numbers: [],
+    plan_type: 'personal',
+    blocked_dates: [],
+    description: 'Fisioterapia e Pilates clínico para todas as idades. Melhore sua postura e qualidade de vida.',
+    website_url: 'https://studiolotus.com.br',
+    pix_key: 'lotus@studiolotus.com.br',
+    success_message: 'Use roupas leves e confortáveis para a sua prática de Pilates.'
+  }
+];
+
+const MOCK_PROFESSIONALS: Professional[] = [
+  // Barbearia Vintage & Navalha (t-1)
+  {
+    id: 'p-1',
+    tenant_id: 't-1',
+    name: 'Carlos Barbeiro',
+    avatar_url: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80',
+    specialty: 'Corte Degradê & Barba Navalhada',
+    is_active: true
+  },
+  {
+    id: 'p-2',
+    tenant_id: 't-1',
+    name: 'Felipe Santos',
+    avatar_url: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=150&q=80',
+    specialty: 'Visagismo & Barbaterapia',
+    is_active: true
+  },
+  // Clínica Sorriso Saudável (t-2)
+  {
+    id: 'p-3',
+    tenant_id: 't-2',
+    name: 'Dra. Beatriz Santos',
+    avatar_url: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=150&q=80',
+    specialty: 'Ortodontia & Estética Dental',
+    is_active: true
+  },
+  // Studio Lotus Pilates (t-3)
+  {
+    id: 'p-4',
+    tenant_id: 't-3',
+    name: 'Prof. Amanda Costa',
+    avatar_url: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?auto=format&fit=crop&w=150&q=80',
+    specialty: 'Fisioterapia & Pilates Clinico',
+    is_active: true
   }
 ];
 
@@ -221,6 +314,7 @@ interface DBData {
   services: Service[];
   appointments: Appointment[];
   profiles: Profile[];
+  professionals: Professional[];
   currentTenantId: string;
   currentUserId: string;
 }
@@ -231,6 +325,7 @@ let tempStorage: DBData = {
   services: MOCK_SERVICES,
   appointments: MOCK_APPOINTMENTS,
   profiles: MOCK_PROFILES,
+  professionals: MOCK_PROFESSIONALS,
   currentTenantId: 't-1', // Default logged-in tenant is Barbearia Vintage
   currentUserId: 'u-1'
 };
@@ -244,14 +339,16 @@ function loadData(): DBData {
   const services = localStorage.getItem('slotfy_services');
   const appointments = localStorage.getItem('slotfy_appointments');
   const profiles = localStorage.getItem('slotfy_profiles');
+  const professionals = localStorage.getItem('slotfy_professionals');
   const currentTenantId = localStorage.getItem('slotfy_current_tenant_id') || 't-1';
   
-  if (!tenants || !services || !appointments || !profiles) {
+  if (!tenants || !services || !appointments || !profiles || !professionals) {
     // Initial setup in localStorage
     localStorage.setItem('slotfy_tenants', JSON.stringify(MOCK_TENANTS));
     localStorage.setItem('slotfy_services', JSON.stringify(MOCK_SERVICES));
     localStorage.setItem('slotfy_appointments', JSON.stringify(MOCK_APPOINTMENTS));
     localStorage.setItem('slotfy_profiles', JSON.stringify(MOCK_PROFILES));
+    localStorage.setItem('slotfy_professionals', JSON.stringify(MOCK_PROFESSIONALS));
     localStorage.setItem('slotfy_current_tenant_id', currentTenantId);
     
     return {
@@ -259,16 +356,58 @@ function loadData(): DBData {
       services: MOCK_SERVICES,
       appointments: MOCK_APPOINTMENTS,
       profiles: MOCK_PROFILES,
+      professionals: MOCK_PROFESSIONALS,
       currentTenantId,
       currentUserId: 'u-1'
     };
   }
+
+  // Parse existing data
+  let parsedTenants = JSON.parse(tenants);
+  let needsSave = false;
+
+  // Migration: Ensure t-3 is strictly 'personal' and that description, website, address, pix keys exist
+  parsedTenants = parsedTenants.map((t: any) => {
+    if (t.id === 't-3' && t.plan_type !== 'personal') {
+      t.plan_type = 'personal';
+      needsSave = true;
+    }
+    const seed = MOCK_TENANTS.find(m => m.id === t.id);
+    if (seed) {
+      if (t.pix_key === undefined || t.pix_key === null) {
+        t.pix_key = seed.pix_key;
+        needsSave = true;
+      }
+      if (t.success_message === undefined || t.success_message === null) {
+        t.success_message = seed.success_message;
+        needsSave = true;
+      }
+      if (t.description === undefined || t.description === null) {
+        t.description = seed.description;
+        needsSave = true;
+      }
+      if (t.website_url === undefined || t.website_url === null) {
+        t.website_url = seed.website_url;
+        needsSave = true;
+      }
+      if (t.address === undefined || t.address === null) {
+        t.address = seed.address;
+        needsSave = true;
+      }
+    }
+    return t;
+  });
+
+  if (needsSave) {
+    localStorage.setItem('slotfy_tenants', JSON.stringify(parsedTenants));
+  }
   
   return {
-    tenants: JSON.parse(tenants),
+    tenants: parsedTenants,
     services: JSON.parse(services),
     appointments: JSON.parse(appointments),
     profiles: JSON.parse(profiles),
+    professionals: JSON.parse(professionals),
     currentTenantId,
     currentUserId: 'u-1'
   };
@@ -283,6 +422,7 @@ function saveData(data: typeof tempStorage) {
   localStorage.setItem('slotfy_services', JSON.stringify(data.services));
   localStorage.setItem('slotfy_appointments', JSON.stringify(data.appointments));
   localStorage.setItem('slotfy_profiles', JSON.stringify(data.profiles));
+  localStorage.setItem('slotfy_professionals', JSON.stringify(data.professionals));
   localStorage.setItem('slotfy_current_tenant_id', data.currentTenantId);
 }
 
@@ -443,5 +583,208 @@ export const db = {
     }
     data.currentUserId = profile.id;
     saveData(data);
+  },
+
+  // Register a new tenant during checkout
+  registerTenant: (params: {
+    name: string;
+    email: string;
+    password?: string;
+    tenantName: string;
+    whatsappNumber: string;
+    address: string;
+    niche: string;
+    plan: string;
+  }): { tenant: Tenant; profile: Profile } => {
+    const data = loadData();
+    
+    // Generate clean unique slug
+    let slug = params.tenantName
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/(^-|-$)+/g, '');
+      
+    let tempSlug = slug;
+    let counter = 1;
+    while (data.tenants.some(t => t.slug === tempSlug)) {
+      tempSlug = `${slug}-${counter}`;
+      counter++;
+    }
+    slug = tempSlug;
+
+    const tenantId = 't-' + Math.random().toString(36).substr(2, 9);
+    const newTenant: Tenant = {
+      id: tenantId,
+      name: params.tenantName,
+      slug: slug,
+      niche: params.niche,
+      business_hours: DEFAULT_BUSINESS_HOURS,
+      whatsapp_number: params.whatsappNumber,
+      subscription_status: 'active',
+      address: params.address,
+      plan_type: params.plan === 'enterprise' ? 'enterprise' : 'personal',
+      blocked_dates: []
+    };
+
+    const profileId = 'u-' + Math.random().toString(36).substr(2, 9);
+    const newProfile: Profile = {
+      id: profileId,
+      tenant_id: tenantId,
+      name: params.name,
+      email: params.email,
+      role: 'admin'
+    };
+
+    // Auto-seed a default professional using the owner's name and general specialty
+    const newProfessional: Professional = {
+      id: 'p-' + Math.random().toString(36).substr(2, 9),
+      tenant_id: tenantId,
+      name: params.name,
+      specialty: 'Atendimento Geral',
+      is_active: true,
+      avatar_url: ''
+    };
+
+    data.tenants.push(newTenant);
+    data.profiles.push(newProfile);
+    data.professionals.push(newProfessional);
+    data.currentTenantId = tenantId;
+    data.currentUserId = profileId;
+    
+    saveData(data);
+
+    return {
+      tenant: newTenant,
+      profile: newProfile
+    };
+  },
+
+  // Get active professionals for a tenant
+  getProfessionals: (tenantId: string, includeInactive = false): Professional[] => {
+    const data = loadData();
+    return data.professionals.filter(p => p.tenant_id === tenantId && (includeInactive ? true : p.is_active));
+  },
+
+  // Add a new professional
+  createProfessional: (tenantId: string, professional: Omit<Professional, 'id' | 'tenant_id'>): Professional => {
+    const data = loadData();
+    const newProfessional: Professional = {
+      ...professional,
+      id: 'p-' + Math.random().toString(36).substr(2, 9),
+      tenant_id: tenantId
+    };
+    data.professionals.push(newProfessional);
+    saveData(data);
+    return newProfessional;
+  },
+
+  // Update professional details
+  updateProfessional: (id: string, updates: Partial<Professional>): Professional => {
+    const data = loadData();
+    const index = data.professionals.findIndex(p => p.id === id);
+    if (index === -1) throw new Error("Professional not found");
+    
+    const updated = { ...data.professionals[index], ...updates };
+    data.professionals[index] = updated;
+    saveData(data);
+    return updated;
+  },
+
+  // Delete a professional
+  deleteProfessional: (id: string): void => {
+    const data = loadData();
+    data.professionals = data.professionals.filter(p => p.id !== id);
+    saveData(data);
+  },
+
+  // Toggle client number blacklist
+  toggleBlacklistNumber: (tenantId: string, phoneNumber: string): string[] => {
+    const data = loadData();
+    const tenantIndex = data.tenants.findIndex(t => t.id === tenantId);
+    if (tenantIndex === -1) throw new Error("Tenant not found");
+    
+    const tenant = data.tenants[tenantIndex];
+    let blacklist = tenant.blacklist_numbers || [];
+    
+    if (blacklist.includes(phoneNumber)) {
+      blacklist = blacklist.filter(num => num !== phoneNumber);
+    } else {
+      blacklist = [...blacklist, phoneNumber];
+    }
+    
+    data.tenants[tenantIndex] = {
+      ...tenant,
+      blacklist_numbers: blacklist
+    };
+    saveData(data);
+    return blacklist;
+  },
+
+  // Super Admin Methods
+  getAllTenantsAdmin: (): Tenant[] => {
+    const data = loadData();
+    return data.tenants;
+  },
+  updateTenantStatusAdmin: (tenantId: string, status: 'active' | 'inactive' | 'past_due'): Tenant => {
+    const data = loadData();
+    const idx = data.tenants.findIndex(t => t.id === tenantId);
+    if (idx !== -1) {
+      data.tenants[idx].subscription_status = status;
+      saveData(data);
+      return data.tenants[idx];
+    }
+    throw new Error('Tenant not found');
+  },
+  updateTenantPlanAdmin: (tenantId: string, plan: 'personal' | 'enterprise'): Tenant => {
+    const data = loadData();
+    const idx = data.tenants.findIndex(t => t.id === tenantId);
+    if (idx !== -1) {
+      data.tenants[idx].plan_type = plan;
+      saveData(data);
+      return data.tenants[idx];
+    }
+    throw new Error('Tenant not found');
+  },
+  deleteTenantAdmin: (tenantId: string): void => {
+    const data = loadData();
+    data.tenants = data.tenants.filter(t => t.id !== tenantId);
+    data.profiles = data.profiles.filter(p => p.tenant_id !== tenantId);
+    // Also cleanup appointments, services and professionals associated
+    data.appointments = data.appointments.filter(a => a.tenant_id !== tenantId);
+    data.services = data.services.filter(s => s.tenant_id !== tenantId);
+    data.professionals = data.professionals.filter(p => p.tenant_id !== tenantId);
+    saveData(data);
+  },
+  addBlockedDate: (tenantId: string, dateStr: string): string[] => {
+    const data = loadData();
+    const tenantIndex = data.tenants.findIndex(t => t.id === tenantId);
+    if (tenantIndex === -1) throw new Error("Tenant not found");
+    const tenant = data.tenants[tenantIndex];
+    let blocked = tenant.blocked_dates || [];
+    if (!blocked.includes(dateStr)) {
+      blocked = [...blocked, dateStr];
+    }
+    data.tenants[tenantIndex] = {
+      ...tenant,
+      blocked_dates: blocked
+    };
+    saveData(data);
+    return blocked;
+  },
+  removeBlockedDate: (tenantId: string, dateStr: string): string[] => {
+    const data = loadData();
+    const tenantIndex = data.tenants.findIndex(t => t.id === tenantId);
+    if (tenantIndex === -1) throw new Error("Tenant not found");
+    const tenant = data.tenants[tenantIndex];
+    let blocked = tenant.blocked_dates || [];
+    blocked = blocked.filter(d => d !== dateStr);
+    data.tenants[tenantIndex] = {
+      ...tenant,
+      blocked_dates: blocked
+    };
+    saveData(data);
+    return blocked;
   }
 };
