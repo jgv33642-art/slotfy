@@ -10,6 +10,7 @@ export async function POST(req: NextRequest) {
       tenantId,
       email,
       plan,
+      billingCycle,
       paymentMethod,
       cardToken,
       paymentMethodId,
@@ -24,11 +25,20 @@ export async function POST(req: NextRequest) {
     }
 
     const planType = plan === 'enterprise' ? 'enterprise' : 'personal';
-    const price = planType === 'enterprise' ? 94.90 : 29.90;
-    const planName = planType === 'enterprise' ? 'Renovação Slotfy - Plano Empresarial' : 'Renovação Slotfy - Plano Pessoal';
+    const isYearly = billingCycle === 'yearly';
+    const durationDays = isYearly ? 365 : 30;
+
+    let price = planType === 'enterprise' ? 94.90 : 29.90;
+    if (isYearly) {
+      price = planType === 'enterprise' ? 1081.86 : 340.86;
+    }
+
+    const planName = planType === 'enterprise' 
+      ? `Renovação Slotfy - Plano Empresarial (${isYearly ? 'Anual' : 'Mensal'})` 
+      : `Renovação Slotfy - Plano Pessoal (${isYearly ? 'Anual' : 'Mensal'})`;
 
     let paymentStatus = 'pending';
-    let subscriptionExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    let subscriptionExpiresAt = new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000).toISOString();
     let pixData = null;
 
     // 1. Process payment via Mercado Pago
